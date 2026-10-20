@@ -1,12 +1,18 @@
 import { useMemo, useState } from 'react';
 import { ArrowDown, ArrowUp } from 'lucide-react';
 import { useTreeModeProfile } from '../../hooks/useGlobalStats';
+import { usePersistentState } from '../../hooks/usePersistentState';
 import { calculateStats, type AggregatedStats, type StatSensitivity } from '../../utils/statEngine';
 import { playerCombatStats } from '../../engine/mapStats';
 import { getStatName } from '../../utils/statNames';
 import { cn } from '../../lib/utils';
 
-type SortColumn = 'dpsChange' | 'healingHpsChange' | 'effectiveHpsChange' | 'maximumHealthChange';
+type SortColumn = 'combinedScore' | 'dpsChange' | 'healingHpsChange' | 'effectiveHpsChange' | 'maximumHealthChange';
+
+interface ScorePreferences {
+    survivalHpsRate: number;
+    maximumHealthRate: number;
+}
 
 interface SensitivityRow {
     id: string;
@@ -17,6 +23,26 @@ interface SensitivityRow {
     effectiveHpsChange: number;
     maximumHealthChange: number;
     inactiveReason?: string;
+}
+
+const DEFAULT_SCORE_PREFERENCES: ScorePreferences = {
+    survivalHpsRate: 1,
+    maximumHealthRate: 0,
+};
+
+const SCORE_PREFERENCES_KEY = 'fm_stat_value_score_preferences';
+
+function normalizeScorePreferences(preferences: Partial<ScorePreferences> | null | undefined): ScorePreferences {
+    return {
+        survivalHpsRate: typeof preferences?.survivalHpsRate === 'number'
+            && Number.isFinite(preferences.survivalHpsRate) && preferences.survivalHpsRate >= 0
+            ? preferences.survivalHpsRate
+            : DEFAULT_SCORE_PREFERENCES.survivalHpsRate,
+        maximumHealthRate: typeof preferences?.maximumHealthRate === 'number'
+            && Number.isFinite(preferences.maximumHealthRate) && preferences.maximumHealthRate >= 0
+            ? preferences.maximumHealthRate
+            : DEFAULT_SCORE_PREFERENCES.maximumHealthRate,
+    };
 }
 
 function mirrorBlockableDamagePerSecond(stats: AggregatedStats): number {
@@ -65,7 +91,14 @@ function inactiveReason(statId: string, isRanged: boolean, hasSkills: boolean): 
 
 export function StatValuePanel() {
     const { profile, libs, ready } = useTreeModeProfile();
-    const [sortColumn, setSortColumn] = useState<SortColumn>('dpsChange');
+    const [storedPreferences, setStoredPreferences] = usePersistentState<ScorePreferences>(
+        SCORE_PREFERENCES_KEY,
+        DEFAULT_SCORE_PREFERENCES
+    );
+    const preferences = normalizeScorePreferences(storedPreferences);
+    const [survivalRateInput, setSurvivalRateInput] = useState(String(preferences.survivalHpsRate));
+    const [maximumHealthRateInput, setMaximumHealthRateInput] = useState(String(preferences.maximumHealthRate));
+    const [sortColumn, setSortColumn] = useState<SortColumn>('combinedScore');
     const [sortDescending, setSortDescending] = useState(true);
 
     const rows = useMemo((): SensitivityRow[] => {
@@ -116,10 +149,32 @@ export function StatValuePanel() {
         ];
     }, [libs, profile, ready]);
 
-    const sortedRows = useMemo(() => [...rows].sort((a, b) => {
+    const scoredRows = useMemo(() => rows.map(row => ({
+        ...row,
+        combinedScore: row.dpsChange
+            + preferences.survivalHpsRate * (row.healingHpsChange + row.effectiveHpsChange)
+            + preferences.maximumHealthRate * row.maximumHealthChange,
+    })), [preferences, rows]);
+
+    const sortedRows = useMemo(() => [...scoredRows].sort((a, b) => {
         const difference = a[sortColumn] - b[sortColumn];
         return (sortDescending ? -difference : difference) || a.label.localeCompare(b.label);
-    }), [rows, sortColumn, sortDescending]);
+    }), [scoredRows, sortColumn, sortDescending]);
+
+    const updateRate = (field: keyof ScorePreferences, input: string) => {
+        const value = Number(input);
+        if (input.trim() !== '' && Number.isFinite(value) && value >= 0) {
+            setStoredPreferences(current => ({ ...normalizeScorePreferences(current), [field]: value }));
+        }
+    };
+
+    const resetInvalidRate = (field: keyof ScorePreferences) => {
+        if (field === 'survivalHpsRate') {
+            setSurvivalRateInput(String(preferences.survivalHpsRate));
+        } else {
+            setMaximumHealthRateInput(String(preferences.maximumHealthRate));
+        }
+    };
 
     const changeSort = (column: SortColumn) => {
         if (column === sortColumn) {
@@ -164,8 +219,49 @@ export function StatValuePanel() {
                 </div>
             </header>
 
+            <div className="flex flex-wrap items-end gap-3 rounded-xl border border-border/40 bg-bg-input/20 p-3">
+                <label className="flex flex-col gap-1 text-xs text-text-muted">
+                    <span>Survival HPS exchange rate (DPS-eq per HPS)</span>
+                    <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        inputMode="decimal"
+                        value={survivalRateInput}
+                        onChange={event => {
+                            setSurvivalRateInput(event.target.value);
+                            updateRate('survivalHpsRate', event.target.value);
+                        }}
+                        onBlur={() => resetInvalidRate('survivalHpsRate')}
+                        aria-label="Survival HPS exchange rate"
+                        className="w-40 rounded-lg border border-border/50 bg-bg-secondary px-2.5 py-1.5 text-sm text-text-primary"
+                    />
+                </label>
+                <label className="flex flex-col gap-1 text-xs text-text-muted">
+                    <span>Maximum HP exchange rate (DPS-eq per HP)</span>
+                    <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        inputMode="decimal"
+                        value={maximumHealthRateInput}
+                        onChange={event => {
+                            setMaximumHealthRateInput(event.target.value);
+                            updateRate('maximumHealthRate', event.target.value);
+                        }}
+                        onBlur={() => resetInvalidRate('maximumHealthRate')}
+                        aria-label="Maximum HP exchange rate"
+                        className="w-40 rounded-lg border border-border/50 bg-bg-secondary px-2.5 py-1.5 text-sm text-text-primary"
+                    />
+                </label>
+                <p className="text-xs text-text-muted">
+                    Score = DPS change + rate × (healing HPS + effective HPS) + HP rate × maximum HP change.
+                    Survival rate defaults to 1:1; maximum HP rate defaults to 0. Rates are saved across profiles and visits.
+                </p>
+            </div>
+
             <div className="overflow-x-auto rounded-xl border border-border/40">
-                <table className="w-full min-w-[820px] border-collapse text-sm">
+                <table className="w-full min-w-[1000px] border-collapse text-sm">
                     <thead className="bg-bg-input/40 text-xs text-text-muted">
                         <tr>
                             <th scope="col" className="px-3 py-2 text-left font-semibold">Stat / increment</th>
@@ -173,6 +269,7 @@ export function StatValuePanel() {
                             <th scope="col" className="px-3 py-2 text-right font-semibold">{sortButton('healingHpsChange', 'Healing HPS change')}</th>
                             <th scope="col" className="px-3 py-2 text-right font-semibold">{sortButton('effectiveHpsChange', 'Block-prevented effective HPS')}</th>
                             <th scope="col" className="px-3 py-2 text-right font-semibold">{sortButton('maximumHealthChange', 'Maximum HP change')}</th>
+                            <th scope="col" className="px-3 py-2 text-right font-semibold">{sortButton('combinedScore', 'Combined score (DPS-eq)')}</th>
                         </tr>
                     </thead>
                     <tbody className="divide-y divide-border/30">
@@ -195,6 +292,9 @@ export function StatValuePanel() {
                                 <td className="px-3 py-2.5 text-right font-mono text-emerald-300">{formatChange(row.healingHpsChange)}</td>
                                 <td className="px-3 py-2.5 text-right font-mono text-cyan-300">{formatChange(row.effectiveHpsChange)}</td>
                                 <td className="px-3 py-2.5 text-right font-mono text-green-300">{formatChange(row.maximumHealthChange)}</td>
+                                <td className="px-3 py-2.5 text-right font-mono font-semibold text-text-primary">
+                                    {formatChange(row.combinedScore)} <span className="text-[10px] font-normal text-text-muted">DPS-eq</span>
+                                </td>
                             </tr>
                         ))}
                     </tbody>
