@@ -26,6 +26,7 @@ import { DpsBreakdownModal } from './DpsBreakdownModal';
 import { LifestealBreakdownModal } from './LifestealBreakdownModal';
 import { useEngineCheck, type EngineCheckState } from '../../hooks/useEngineCheck';
 import { StatSourcesModal, MultiplierBreakdown } from './StatSourcesModal';
+import { StatValuePanel } from './StatValuePanel';
 import { TOTAL_DAMAGE_KEY, TOTAL_HEALTH_KEY, TOTAL_POWER_KEY } from '../../types/statAttribution';
 
 interface StatRowProps {
@@ -432,7 +433,7 @@ export function StatsSummaryPanel({ variant = 'sidebar', onClose, hideActions = 
     };
 
     const [openSection, setOpenSection] = useState<string | null>(null);
-    const [viewTab, setViewTab] = useState<'general' | 'metrics' | 'hits' | 'passives'>(defaultTab);
+    const [viewTab, setViewTab] = useState<'general' | 'metrics' | 'hits' | 'passives' | 'statValue'>(defaultTab);
     const comparison = useComparison();
     const {
         isComparing,
@@ -1463,11 +1464,49 @@ export function StatsSummaryPanel({ variant = 'sidebar', onClose, hideActions = 
                                 <Sparkles className="w-3.5 h-3.5" />
                                 <span>Stats</span>
                             </button>
+                            <button
+                                onClick={() => setViewTab('statValue')}
+                                className={cn(
+                                    "flex-1 py-1.5 px-2 rounded-lg transition-all flex items-center justify-center gap-1 text-[10px] font-bold uppercase tracking-wider min-w-[70px]",
+                                    viewTab === 'statValue' ? "bg-cyan-500 text-white shadow-md" : "text-text-muted hover:text-text-primary"
+                                )}
+                            >
+                                <TrendingUp className="w-3.5 h-3.5" />
+                                <span>Stat Value</span>
+                            </button>
                         </div>
-                        {comparisonContent}
+                        {viewTab === 'statValue' ? <StatValuePanel /> : comparisonContent}
                     </div>
                 ) : (
                     <div className="space-y-6">
+                        <div role="tablist" aria-label="Character stats views" className="flex rounded-xl border border-border/50 bg-bg-secondary p-1">
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={viewTab !== 'statValue'}
+                                onClick={() => setViewTab('general')}
+                                className={cn(
+                                    "flex-1 rounded-lg px-3 py-2 text-xs font-bold transition-colors",
+                                    viewTab !== 'statValue' ? "bg-accent-primary text-white" : "text-text-muted hover:text-text-primary"
+                                )}
+                            >
+                                Overview
+                            </button>
+                            <button
+                                type="button"
+                                role="tab"
+                                aria-selected={viewTab === 'statValue'}
+                                onClick={() => setViewTab('statValue')}
+                                className={cn(
+                                    "flex-1 rounded-lg px-3 py-2 text-xs font-bold transition-colors",
+                                    viewTab === 'statValue' ? "bg-cyan-500 text-white" : "text-text-muted hover:text-text-primary"
+                                )}
+                            >
+                                Stat Value
+                            </button>
+                        </div>
+                        {viewTab === 'statValue' ? <StatValuePanel /> : (
+                        <div className="space-y-6">
                         {/* Summary Section */}
                         <div className="space-y-3">
                             <StatRow
@@ -1955,6 +1994,8 @@ export function StatsSummaryPanel({ variant = 'sidebar', onClose, hideActions = 
                                 </div>
                             )}
                         </CollapsibleSection>
+                        </div>
+                        )}
                     </div>
                 )}
             </div>

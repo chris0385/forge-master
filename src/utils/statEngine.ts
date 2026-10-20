@@ -437,9 +437,22 @@ function treeNodeById(treeData: any, nodeId: number): any {
     return index.get(nodeId);
 }
 
+export interface StatSensitivity {
+    weaponDamage?: number;
+    maximumHealth?: number;
+    /** Percentage points, in the same units as an item's stored secondary stat value. */
+    secondaryStats?: Record<string, number>;
+}
+
+export interface CalculateStatsOptions {
+    attribution?: boolean;
+    sensitivity?: StatSensitivity;
+}
+
 export class StatEngine {
     private profile: UserProfile;
     private libs: LibraryData;
+    private sensitivity: StatSensitivity;
     private stats: AggregatedStats;
     private nodeValidityCache: Map<string, boolean> = new Map();
     private validNodesCache: Map<string, Set<number>> = new Map();
@@ -516,12 +529,19 @@ export class StatEngine {
     private trackAttribution: boolean;
     private attribution: StatAttribution = { byStat: {}, formula: {} };
 
-    constructor(profile: UserProfile, libs: LibraryData, excludeSubstats = false, trackAttribution = false) {
+    constructor(
+        profile: UserProfile,
+        libs: LibraryData,
+        excludeSubstats = false,
+        trackAttribution = false,
+        sensitivity: StatSensitivity = {}
+    ) {
         // Skins equipped from the archive are worn as the archive has them now (stats, level).
         this.profile = withArchivedSkins(profile);
         this.libs = libs;
         this.excludeSubstats = excludeSubstats;
         this.trackAttribution = trackAttribution;
+        this.sensitivity = sensitivity;
         this.stats = { ...DEFAULT_STATS };
     }
 
@@ -535,6 +555,10 @@ export class StatEngine {
         // Phase 2: Collect Flat Stats (Items, Pets) with tech tree bonuses applied
         // collectItemStats also applies per-item skin multipliers
         this.collectItemStats();
+        if (this.sensitivity.weaponDamage) {
+            this.stats.weaponDamage += this.sensitivity.weaponDamage;
+            this.stats.itemDamage += this.sensitivity.weaponDamage;
+        }
         this.collectPetStats();
 
         // Phase 2.5: Collect Skin Set Bonuses
@@ -1240,6 +1264,10 @@ export class StatEngine {
             }
         }
 
+        for (const [statId, value] of Object.entries(this.sensitivity.secondaryStats || {})) {
+            collectSecondary(statId, value);
+        }
+
         this.debugLogs.push(`Secondary Stats: DamageMulti=${(this.secondaryStats.damageMulti * 100).toFixed(1)}%, HealthMulti=${(this.secondaryStats.healthMulti * 100).toFixed(1)}%, MeleeDamageMulti=${(this.secondaryStats.meleeDamageMulti * 100).toFixed(1)}%`);
     }
 
@@ -1839,7 +1867,7 @@ export class StatEngine {
 
         // 8. Final stats
         this.stats.totalDamage = finalDamage;
-        this.stats.totalHealth = healthAfterGlobalMultis;
+        this.stats.totalHealth = healthAfterGlobalMultis + (this.sensitivity.maximumHealth || 0);
 
         // --- Attribution: base values, multiplier layers and formulas for the total views ---
         if (this.trackAttribution) {
@@ -2230,9 +2258,9 @@ export function calculateStats(
     profile: UserProfile,
     libs: LibraryData,
     excludeSubstats = false,
-    opts?: { attribution?: boolean }
+    opts?: CalculateStatsOptions
 ): any {
-    const engine = new StatEngine(profile, libs, excludeSubstats, opts?.attribution === true);
+    const engine = new StatEngine(profile, libs, excludeSubstats, opts?.attribution === true, opts?.sensitivity);
     if (typeof window !== 'undefined') {
         (window as any).debugCalculator = engine;
     }
