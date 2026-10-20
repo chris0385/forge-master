@@ -858,7 +858,7 @@ interface Resolved {
     touched: { items: boolean; pets: boolean; mount: boolean; misc: boolean; skills: boolean; tree: boolean };
     /** Which slots/identities the accepted rows produced, with the rows that produced them. */
     itemTargets: Map<string, { name?: string; rowIds: string[] }>;
-    petTargets: Map<string, { name?: string; rowIds: string[] }>;
+    petTargets: Map<string, { key: string; pet: PetSlot; name?: string; rowIds: string[] }>;
     mountTarget: { name?: string; rowIds: string[] } | null;
 }
 
@@ -882,7 +882,7 @@ function resolveChanges(profile: UserProfile, rows: ChangeRow[]): Resolved {
     const clanLevels: Record<number, number> = {};
     let touchedItems = false, touchedPets = false, touchedMount = false, touchedMisc = false, touchedSkills = false, touchedTree = false;
     const itemTargets = new Map<string, { name?: string; rowIds: string[] }>();
-    const petTargets = new Map<string, { name?: string; rowIds: string[] }>();
+    const petTargets = new Map<string, { key: string; pet: PetSlot; name?: string; rowIds: string[] }>();
     const mountTargets = new Map<string, { name?: string; rowIds: string[] }>(); // single 'mount' key
 
     for (const r of accepted) {
@@ -897,7 +897,10 @@ function resolveChanges(profile: UserProfile, rows: ChangeRow[]): Resolved {
             while (activePets.length <= slot) activePets.push(null);
             activePets[slot] = p.pet;
             touchedPets = true;
-            noteTarget(petTargets, p.key, r);
+            const buildKey = `${p.key}:${p.pet.level}:${JSON.stringify(p.pet.secondaryStats ?? [])}`;
+            const target = petTargets.get(buildKey);
+            if (target) target.rowIds.push(r.id);
+            else petTargets.set(buildKey, { key: p.key, pet: p.pet, name: r.presetName, rowIds: [r.id] });
         }
         else if (p.t === 'mount') {
             mount = p.mount; touchedMount = true;
@@ -971,12 +974,18 @@ function planFromResolved(profile: UserProfile, res: Resolved): PresetSave[] {
         out.push({ kind: 'item', slot, name: meta.name || `${slot} Lv.${item.level}`, rowIds: meta.rowIds });
     }
 
-    const petBuilds = profile.pets?.savedBuilds ?? [];
-    for (const [key, meta] of res.petTargets) {
-        const pet = res.collection[key];
-        if (!pet) continue;
+    const petBuilds = [...(profile.pets?.savedBuilds ?? [])];
+    for (const meta of res.petTargets.values()) {
+        const { key, pet } = meta;
         if (petBuilds.some(s => sameSavedUnit(s, pet))) continue;
-        out.push({ kind: 'pet', key, name: meta.name || `Pet #${pet.id}`, rowIds: meta.rowIds });
+        petBuilds.push(pet);
+        const stats = pet.secondaryStats?.length ? ` · ${substatSummary(pet.secondaryStats)}` : '';
+        out.push({
+            kind: 'pet',
+            key,
+            name: `${meta.name || `Pet #${pet.id}`} · Lv.${pet.level}${stats}`,
+            rowIds: meta.rowIds,
+        });
     }
 
     if (res.mountTarget && res.mount) {
@@ -1005,7 +1014,7 @@ export function planPresetSaves(profile: UserProfile, rows: ChangeRow[]): Preset
 export function applyChanges(
     profile: UserProfile,
     rows: ChangeRow[],
-    opts: { savePresets?: boolean } = {},
+    opts: { savePresets?: boolean; updateActivePets?: boolean } = {},
 ): Partial<UserProfile> {
     const savePresets = opts.savePresets !== false;
     const res = resolveChanges(profile, rows);
@@ -1014,7 +1023,13 @@ export function applyChanges(
 
     const out: Partial<UserProfile> = {};
     if (touched.items) out.items = res.items;
-    if (touched.pets) out.pets = { ...profile.pets, collection: res.collection, active: res.activePets.filter((s): s is PetSlot => !!s).slice(0, MAX_ACTIVE_PETS) };
+    if (touched.pets) {
+        out.pets = {
+            ...profile.pets,
+            collection: res.collection,
+            ...(opts.updateActivePets === false ? {} : { active: res.activePets.filter((s): s is PetSlot => !!s).slice(0, MAX_ACTIVE_PETS) }),
+        };
+    }
     if (touched.mount) out.mount = { ...profile.mount, active: res.mount };
     if (touched.misc) out.misc = res.misc;
     // skills store per-skill levels in `passives` ({ skillId -> level }); same key the Skills panel

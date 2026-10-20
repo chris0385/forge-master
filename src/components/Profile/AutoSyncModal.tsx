@@ -426,11 +426,13 @@ export function AutoSyncModal({ onClose, preset }: { onClose: () => void; preset
         }));
     };
     const [savePresets, setSavePresets] = useState(true);
+    const petPresetOnly = preset === 'pet';
+    const savePresetsForRun = petPresetOnly || savePresets;
 
     const acceptedCount = rows.filter(r => r.accepted).length;
     // Bookmarks the apply would ALSO write (append-only, skips anything already saved). Shown
     // per-row and in the footer so auto-saving is never a surprise.
-    const presetPlan = useMemo(() => (savePresets ? planPresetSaves(profile, rows) : []), [profile, rows, savePresets]);
+    const presetPlan = useMemo(() => (savePresetsForRun ? planPresetSaves(profile, rows) : []), [profile, rows, savePresetsForRun]);
     const presetRowIds = useMemo(() => new Set(presetPlan.flatMap(p => p.rowIds)), [presetPlan]);
     // Counted BEFORE applying: once the profile holds them, the plan is empty by design.
     const [presetsWritten, setPresetsWritten] = useState(0);
@@ -438,7 +440,7 @@ export function AutoSyncModal({ onClose, preset }: { onClose: () => void; preset
         setPresetsWritten(presetPlan.length);
         // Last gate: whatever was typed or toggled, nothing outside the game's bounds is written.
         const safeRows = limits ? enforceGameLimits(rows, limits, profile).map((r, k) => ({ ...r, accepted: rows[k].accepted })) : rows;
-        updateProfile(applyChanges(profile, safeRows, { savePresets }));
+        updateProfile(applyChanges(profile, safeRows, { savePresets: savePresetsForRun, updateActivePets: !petPresetOnly }));
         setStage('done');
     };
     const grouped = useMemo(() => {
@@ -449,10 +451,11 @@ export function AutoSyncModal({ onClose, preset }: { onClose: () => void; preset
     // CONFLICT RULE: two ACCEPTED pet rows targeting the same active slot block Apply (and >3
     // accepted pet rows always clash — there are only 3 slots).
     const petSlotConflicts = useMemo(() => {
+        if (petPresetOnly) return new Set<number>();
         const count: Record<number, number> = {};
         for (const r of rows) if (r.accepted && r.patch.t === 'pet') count[r.patch.slotIndex] = (count[r.patch.slotIndex] ?? 0) + 1;
         return new Set(Object.entries(count).filter(([, c]) => c > 1).map(([s]) => parseInt(s)));
-    }, [rows]);
+    }, [rows, petPresetOnly]);
     const hasPetConflict = petSlotConflicts.size > 0;
 
     // proposed-icon renderer
@@ -782,7 +785,7 @@ export function AutoSyncModal({ onClose, preset }: { onClose: () => void; preset
                                                                 className={cn('w-20 px-1 py-0.5 text-right', NUM_CLS, isEdited(r.id, 'value') && EDITED_RING)} />
                                                         </span>
                                                     ) : r.patch.t === 'clanTree' ? null : (
-                                                        <span className="font-mono text-xs text-text-secondary shrink-0">{r.before} <span className="text-accent-primary">→</span> <span className={cn('font-bold', isEdited(r.id, 'ascension') ? 'text-amber-200' : 'text-white')}>{r.after}</span></span>
+                                                        <span className="font-mono text-xs text-text-secondary shrink-0">{petPresetOnly && r.patch.t === 'pet' ? 'Saved build' : r.before}<span className="text-accent-primary">→</span><span className={cn('font-bold', isEdited(r.id, 'ascension') ? 'text-amber-200' : 'text-white')}>{r.after}</span></span>
                                                     )}
                                                 </label>
                                             ) : (
@@ -793,7 +796,11 @@ export function AutoSyncModal({ onClose, preset }: { onClose: () => void; preset
                                                             (black) through the portal and vanishes on the dark card. */}
                                                         <span title={r.label} className="font-bold text-sm text-white min-w-[6rem] break-words">{r.label}</span>
                                                         <ConfidenceChip c={r.confidence} />
-                                                        <span className="text-[9px] uppercase font-bold text-text-muted">{r.action}</span>
+                                                        <span className="text-[9px] uppercase font-bold text-text-muted">
+                                                            {petPresetOnly && r.patch.t === 'pet'
+                                                                ? r.accepted ? (presetRowIds.has(r.id) ? 'save preset' : 'already saved') : 'review'
+                                                                : r.action}
+                                                        </span>
                                                         {presetRowIds.has(r.id) && (
                                                             <span title="Will also be saved to your presets" className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border text-sky-300 bg-sky-500/10 border-sky-500/30 flex items-center gap-1">
                                                                 <Bookmark className="w-3 h-3" /> preset
@@ -819,7 +826,7 @@ export function AutoSyncModal({ onClose, preset }: { onClose: () => void; preset
                                                                 </select>
                                                             </div>
                                                         )}
-                                                        {r.patch.t === 'pet' && (
+                                                        {r.patch.t === 'pet' && !petPresetOnly && (
                                                             <div className="ml-auto flex items-center gap-1.5">
                                                                 {r.accepted && petSlotConflicts.has(r.patch.slotIndex) && (
                                                                     <span className="px-1.5 py-0.5 rounded text-[9px] font-bold uppercase border text-amber-400 bg-amber-500/10 border-amber-500/30 flex items-center gap-1">
@@ -933,19 +940,25 @@ export function AutoSyncModal({ onClose, preset }: { onClose: () => void; preset
                 )}
                 {stage === 'diff' && rows.length > 0 && (
                     <div className="p-3 border-t border-border space-y-2">
-                        {/* Auto-bookmark: opt-out, and always says exactly what it will add. */}
-                        <label className="flex items-start gap-2 text-[11px] text-text-secondary cursor-pointer">
-                            <input type="checkbox" checked={savePresets} onChange={e => setSavePresets(e.target.checked)}
-                                className="w-3.5 h-3.5 mt-0.5 accent-accent-primary shrink-0" />
-                            <span className="min-w-0">
-                                <span className="font-bold text-white">Also save to presets</span>
-                                {presetPlan.length > 0
-                                    ? <>. Will also save to presets: <span className="text-sky-300">{presetPlan.map(p => `${p.name}${p.kind === 'item' ? ` (${p.slot})` : ''}`).join(', ')}</span></>
-                                    : savePresets
-                                        ? <>. Nothing new to bookmark (already saved, or no gear/pet/mount in this batch).</>
-                                        : <>. Off: applied gear, pets & mounts will not be bookmarked.</>}
-                            </span>
-                        </label>
+                        {petPresetOnly ? (
+                            <p className="text-[11px] text-text-secondary">
+                                Pet builds will be saved as presets. Active pets will not change.
+                                {presetPlan.length > 0 && <> New presets: <span className="text-sky-300">{presetPlan.map(p => p.name).join(', ')}</span></>}
+                            </p>
+                        ) : (
+                            <label className="flex items-start gap-2 text-[11px] text-text-secondary cursor-pointer">
+                                <input type="checkbox" checked={savePresets} onChange={e => setSavePresets(e.target.checked)}
+                                    className="w-3.5 h-3.5 mt-0.5 accent-accent-primary shrink-0" />
+                                <span className="min-w-0">
+                                    <span className="font-bold text-white">Also save to presets</span>
+                                    {presetPlan.length > 0
+                                        ? <>. Will also save to presets: <span className="text-sky-300">{presetPlan.map(p => `${p.name}${p.kind === 'item' ? ` (${p.slot})` : ''}`).join(', ')}</span></>
+                                        : savePresets
+                                            ? <>. Nothing new to bookmark (already saved, or no gear/pet/mount in this batch).</>
+                                            : <>. Off: applied gear, pets & mounts will not be bookmarked.</>}
+                                </span>
+                            </label>
+                        )}
                         {hasPetConflict && (
                             <p className="text-[11px] text-amber-400 flex items-center gap-1.5">
                                 <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
@@ -954,7 +967,7 @@ export function AutoSyncModal({ onClose, preset }: { onClose: () => void; preset
                         )}
                         <div className="flex gap-2">
                             <button onClick={() => setStage('upload')} className="px-4 py-2.5 rounded-xl bg-bg-input text-text-secondary hover:text-white text-sm font-bold flex items-center gap-2"><ImageIcon className="w-4 h-4" /> Add more</button>
-                            <button onClick={apply} disabled={!acceptedCount || hasPetConflict} className="flex-1 py-2.5 rounded-xl font-bold bg-accent-primary text-white disabled:opacity-40 hover:brightness-110 flex items-center justify-center gap-2"><Check className="w-4 h-4" /> Apply {acceptedCount} change{acceptedCount === 1 ? '' : 's'}</button>
+                            <button onClick={apply} disabled={!acceptedCount || hasPetConflict} className="flex-1 py-2.5 rounded-xl font-bold bg-accent-primary text-white disabled:opacity-40 hover:brightness-110 flex items-center justify-center gap-2"><Check className="w-4 h-4" /> {petPresetOnly ? `Save ${acceptedCount} pet build${acceptedCount === 1 ? '' : 's'}` : `Apply ${acceptedCount} change${acceptedCount === 1 ? '' : 's'}`}</button>
                         </div>
                     </div>
                 )}
